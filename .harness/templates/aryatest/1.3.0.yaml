@@ -1,0 +1,74 @@
+template:
+  name: aryatest
+  type: Stage
+  tags: {}
+  spec:
+    type: Custom
+    spec:
+      execution:
+        steps:
+          - step:
+              type: ShellScript
+              name: Validate BAPPID
+              identifier: SnowBuddy
+              spec:
+                shell: Bash
+                onDelegate: true
+                source:
+                  type: Inline
+                  spec:
+                    script: |
+                      #!/bin/bash
+
+                      client_secret=<+secrets.getValue("account.harness_authz_client_secret")>
+                      bapp_id=<+pipeline.variables.BAPP_ID>
+                      token=$(curl -s  -d 'grant_type=client_credentials&client_id=TPR-HARNESS.B2B-PROD&client_secret='"$client_secret"'&scope=RETURN_ALL_CLIENT_SCOPES' https://authorization.go.com/v2/token | grep -Eo '"access_token"[^,]*' | grep -Eo '[^:]*$'| tr -d '"')
+
+                      if [ -z ${bapp_id+x} ] || [ "$bapp_id" = "null" ]; then
+                          echo "No BAPP_ID variable is set at the pipeline level. Variables with pipeline scope can be set on the very right side of the pipeline studio, under 'Variables'."
+                          exit 1
+                      fi
+
+                      # API endpoint URL
+                      API_ENDPOINT='https://snowbuddy.wdprapps.disney.com/bapp?bapp_id='"$bapp_id"
+
+                      MAX_RETRIES=3
+                      RETRY_DELAY=2
+
+                      make_api_call() {
+                          response=$(curl -s -o /dev/null -w "%{http_code}" "$API_ENDPOINT" --header 'Authorization: Bearer '"$token"'')
+                          if [ "$response" == "200" ]; then
+                              echo "$bapp_id is valid."
+                          elif [ "$response" == "404" ]; then
+                              echo "$bapp_id is not a valid BAPPID. Please confirm it exists in ServiceNow."
+                              exit 1
+                          else
+                              echo "API call failed with response code $response."
+                              return 1
+                          fi
+                      }
+
+                      # Main script logic
+                      retries=0
+                      while [ $retries -lt $MAX_RETRIES ]; do
+                          make_api_call
+                          if [ $? -eq 0 ]; then
+                              break  # Successful API call, exit the loop
+                          else
+                              retries=$((retries+1))
+                              if [ $retries -lt $MAX_RETRIES ]; then
+                                  echo "Retrying in $RETRY_DELAY seconds..."
+                                  sleep $RETRY_DELAY
+                              else
+                                  echo "Maximum number of retries reached."
+                              fi
+                          fi
+                      done
+                environmentVariables: []
+                outputVariables: []
+              timeout: 10m
+    delegateSelectors:
+      - canary
+  icon: data:image/png;base64,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
+  identifier: aryatest
+  versionLabel: 1.3.0
